@@ -3,7 +3,8 @@ import requests
 from typing import Optional
 import time
 
-API_URL = "http://localhost:8000"
+import os
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 st.set_page_config(
     page_title="SQL Query Generator",
     page_icon="sql.png",
@@ -22,7 +23,7 @@ st.markdown("""
 
 def check_api_health() -> bool:
     try:
-        response = requests.get(f"{API_URL}/health", timeout=2)
+        response = requests.get(f"{API_URL}/health", timeout=60)
         return response.status_code == 200
     except:
         return False
