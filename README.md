@@ -2,6 +2,74 @@
 
 🚀 **[Live Demo](https://nlp-frontend-hau5.onrender.com)** | Try it now!
 
+## 🎯 Examples in Action
+
+### Example 1: E-commerce Analytics
+**Input (Natural Language):**
+```
+Find the top 5 customers who spent the most money in the last quarter
+```
+**Generated SQL (PostgreSQL):**
+```sql
+SELECT 
+    c.customer_id,
+    c.name,
+    SUM(o.total_amount) as total_spent
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+WHERE o.order_date >= CURRENT_DATE - INTERVAL '3 months'
+GROUP BY c.customer_id, c.name
+ORDER BY total_spent DESC
+LIMIT 5;
+```
+
+### Example 2: Multi-Database Support
+**Input (Natural Language):**
+```
+Show me all employees hired in 2024 with salary above 80000
+```
+**Generated SQL (MySQL):**
+```sql
+SELECT 
+    employee_id,
+    first_name,
+    last_name,
+    hire_date,
+    salary
+FROM employees
+WHERE YEAR(hire_date) = 2024 
+    AND salary > 80000
+ORDER BY hire_date DESC;
+```
+
+### Example 3: Schema-Aware Intelligence
+**Input Schema:**
+```sql
+CREATE TABLE products (
+    product_id INT PRIMARY KEY,
+    name VARCHAR(255),
+    category VARCHAR(100),
+    price DECIMAL(10,2),
+    stock_quantity INT
+);
+```
+**Input (Natural Language):**
+```
+List out-of-stock premium products (price > 100)
+```
+**Generated SQL (PostgreSQL):**
+```sql
+SELECT 
+    product_id,
+    name,
+    category,
+    price
+FROM products
+WHERE stock_quantity = 0 
+    AND price > 100
+ORDER BY price DESC;
+```
+
 ## Overview
 The AI-Powered SQL Query Generator is an enterprise-grade solution designed to bridge the gap between natural language questions and complex database queries. Leveraging the advanced reasoning capabilities of Google's Gemini AI, this application interprets user intent and constructs syntactically correct SQL queries across multiple database dialects. It serves as a powerful tool for data analysts, developers, and business intelligence professionals, enabling them to extract insights without deep knowledge of SQL syntax. The system is built with a focus on accuracy, security, and scalability, making it suitable for modern data environments.
 
