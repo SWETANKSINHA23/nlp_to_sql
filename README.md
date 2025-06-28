@@ -1,5 +1,7 @@
 # AI-Powered SQL Query Generator
 
+🚀 **[Live Demo](https://nlp-frontend-hau5.onrender.com)** | Try it now!
+
 ## Overview
 The AI-Powered SQL Query Generator is an enterprise-grade solution designed to bridge the gap between natural language questions and complex database queries. Leveraging the advanced reasoning capabilities of Google's Gemini AI, this application interprets user intent and constructs syntactically correct SQL queries across multiple database dialects. It serves as a powerful tool for data analysts, developers, and business intelligence professionals, enabling them to extract insights without deep knowledge of SQL syntax. The system is built with a focus on accuracy, security, and scalability, making it suitable for modern data environments.
 
