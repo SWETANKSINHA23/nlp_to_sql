@@ -1,5 +1,7 @@
 # AI-Powered SQL Query Generator
 
+---
+
 🚀 **[Live Demo](https://nlp-frontend-hau5.onrender.com)** | Try it now! [![Deployment Status](https://img.shields.io/badge/Deploy-Live-brightgreen)](https://nlp-frontend-hau5.onrender.com)
 
 ## Overview
