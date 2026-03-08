@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 import google.generativeai as genai
 from typing import Optional
 import logging
+import asyncio
+from functools import partial
 from config import settings
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from google.api_core import exceptions as google_exceptions
@@ -70,6 +72,16 @@ def clean_sql_response(response: str) -> str:
 def generate_content_with_retry(full_prompt: str):
     return model.generate_content(full_prompt)
 
+@app.on_event("startup")
+async def warmup():
+    """Pre-warm Gemini connection on startup to reduce first-request latency."""
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, partial(model.generate_content, "hi"))
+        logger.info("Gemini model warmed up successfully")
+    except Exception as e:
+        logger.warning(f"Warmup failed (non-critical): {e}")
+
 @app.get("/")
 def root():
     return {"status": "active", "version": "1.0.0"}
@@ -83,7 +95,9 @@ async def generate_sql(request: QueryRequest):
         db_hint = f"Target database: {request.database_type}\n" if request.database_type else ""
         prompt = build_prompt(question, request.schema)
         full_prompt = f"{SYSTEM_PROMPT}\n\n{db_hint}{prompt}"
-        response = generate_content_with_retry(full_prompt)
+        # Run sync Gemini call in thread pool to avoid blocking the async event loop
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, partial(generate_content_with_retry, full_prompt))
         sql_query = clean_sql_response(response.text)
         logger.info(f"Generated SQL for: {question[:50]}")
         return QueryResponse(
