@@ -104,7 +104,7 @@ with col2:
             st.warning("⚠️ Enter a question")
         else:
             time_since_last = time.time() - st.session_state.last_request_time
-            COOLDOWN_SECONDS = 5
+            COOLDOWN_SECONDS = 15
             if time_since_last < COOLDOWN_SECONDS and st.session_state.request_count > 0:
                 remaining = int(COOLDOWN_SECONDS - time_since_last)
                 st.warning(f"⏳ Please wait {remaining} seconds before making another request to avoid rate limits.")

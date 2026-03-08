@@ -62,8 +62,8 @@ def clean_sql_response(response: str) -> str:
     return sql
 
 @retry(
-    wait=wait_random_exponential(min=1, max=10),
-    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(min=5, max=65),
+    stop=stop_after_attempt(4),
     retry=retry_if_exception_type(google_exceptions.ResourceExhausted),
     reraise=True
 )
