@@ -5,13 +5,12 @@ import google.generativeai as genai
 from typing import Optional
 import logging
 import asyncio
-from functools import partial
 from config import settings
-from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from google.api_core import exceptions as google_exceptions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 genai.configure(api_key=settings.gemini_api_key)
 model = genai.GenerativeModel(
     model_name=settings.model_name,
@@ -22,6 +21,7 @@ model = genai.GenerativeModel(
         "max_output_tokens": settings.max_tokens,
     }
 )
+
 app = FastAPI(title="SQL Query Generator", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -30,14 +30,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 SYSTEM_PROMPT = """You are an expert SQL query generator. Convert natural language to valid SQL.
 Rules:
-- Generate SQL only, no explanations
-- Use standard syntax compatible with PostgreSQL, MySQL, BigQuery, Redshift, Snowflake
+- Generate ONLY the SQL query, no explanations or markdown
+- Use syntax specific to the target database
 - Include proper WHERE, JOIN, GROUP BY clauses as needed
 - Use appropriate aggregations (SUM, AVG, COUNT)
-- Format with proper indentation
-- Return query without markdown blocks"""
+- Return the raw SQL query only, no code fences"""
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
@@ -50,37 +50,43 @@ class QueryResponse(BaseModel):
     database_type: str
     success: bool
 
-def build_prompt(question: str, schema: Optional[str] = None) -> str:
+def build_prompt(question: str, db_type: str, schema: Optional[str] = None) -> str:
+    parts = [SYSTEM_PROMPT, f"\nTarget database: {db_type}"]
     if schema:
-        return f"Database Schema:\n{schema}\n\nQuestion: {question}\n\nGenerate SQL query:"
-    return f"Convert to SQL: {question}"
+        parts.append(f"\nDatabase Schema:\n{schema}")
+    parts.append(f"\nQuestion: {question}\n\nSQL Query:")
+    return "\n".join(parts)
 
-def clean_sql_response(response: str) -> str:
-    sql = response.strip()
-    if sql.startswith("```sql"):
-        sql = sql.replace("```sql", "").replace("```", "").strip()
-    elif sql.startswith("```"):
-        sql = sql.replace("```", "").strip()
-    return sql
+def clean_sql_response(text: str) -> str:
+    sql = text.strip()
+    for fence in ["```sql", "```SQL", "```"]:
+        if sql.startswith(fence):
+            sql = sql[len(fence):]
+    if sql.endswith("```"):
+        sql = sql[:-3]
+    return sql.strip()
 
-@retry(
-    wait=wait_random_exponential(min=5, max=65),
-    stop=stop_after_attempt(4),
-    retry=retry_if_exception_type(google_exceptions.ResourceExhausted),
-    reraise=True
-)
-def generate_content_with_retry(full_prompt: str):
-    return model.generate_content(full_prompt)
+def _call_gemini(prompt: str) -> str:
+    """Blocking Gemini call — run in thread pool."""
+    response = model.generate_content(prompt)
+    return response.text
 
-@app.on_event("startup")
-async def warmup():
-    """Pre-warm Gemini connection on startup to reduce first-request latency."""
-    try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, partial(model.generate_content, "hi"))
-        logger.info("Gemini model warmed up successfully")
-    except Exception as e:
-        logger.warning(f"Warmup failed (non-critical): {e}")
+async def generate_with_retry(prompt: str, max_attempts: int = 3) -> str:
+    """Async retry wrapper — handles 429 properly across thread boundaries."""
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            loop = asyncio.get_event_loop()
+            text = await loop.run_in_executor(None, _call_gemini, prompt)
+            return text
+        except google_exceptions.ResourceExhausted as e:
+            last_error = e
+            wait_sec = 20 * (attempt + 1)   # 20s, 40s, 60s
+            logger.warning(f"Rate limited (attempt {attempt+1}). Waiting {wait_sec}s…")
+            await asyncio.sleep(wait_sec)
+        except Exception as e:
+            raise e
+    raise last_error
 
 @app.get("/")
 def root():
@@ -91,28 +97,34 @@ async def generate_sql(request: QueryRequest):
     try:
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Question required")
-        question = request.question.strip()
-        db_hint = f"Target database: {request.database_type}\n" if request.database_type else ""
-        prompt = build_prompt(question, request.schema)
-        full_prompt = f"{SYSTEM_PROMPT}\n\n{db_hint}{prompt}"
-        # Run sync Gemini call in thread pool to avoid blocking the async event loop
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, partial(generate_content_with_retry, full_prompt))
-        sql_query = clean_sql_response(response.text)
-        logger.info(f"Generated SQL for: {question[:50]}")
+
+        prompt = build_prompt(
+            question=request.question.strip(),
+            db_type=request.database_type,
+            schema=request.schema
+        )
+
+        raw = await generate_with_retry(prompt)
+        sql_query = clean_sql_response(raw)
+        logger.info(f"Generated SQL for: {request.question[:60]}")
+
         return QueryResponse(
             sql_query=sql_query,
-            question=question,
+            question=request.question.strip(),
             database_type=request.database_type,
             success=True
-        )        
+        )
+    except HTTPException:
+        raise
+    except google_exceptions.ResourceExhausted:
+        raise HTTPException(status_code=429, detail="API rate limit exceeded. Please wait a minute and retry.")
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Generation failed: {error_msg}")
-        if "429" in error_msg or isinstance(e, google_exceptions.ResourceExhausted):
-            raise HTTPException(status_code=429, detail="API Quota Exceeded. Please try again later.")
         if "404" in error_msg:
-            raise HTTPException(status_code=500, detail=f"Model '{settings.model_name}' not found or not accessible with this API key.")
+            raise HTTPException(status_code=500, detail=f"Model '{settings.model_name}' not found. Check API key & model name.")
+        if "API_KEY" in error_msg or "api key" in error_msg.lower():
+            raise HTTPException(status_code=500, detail="Invalid or missing API key. Check GEMINI_API_KEY environment variable.")
         raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/health")
