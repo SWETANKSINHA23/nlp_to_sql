@@ -99,7 +99,7 @@ async def generate_sql(request: QueryRequest):
         if "429" in error_msg or isinstance(e, google_exceptions.ResourceExhausted):
             raise HTTPException(status_code=429, detail="API Quota Exceeded. Please try again later.")
         if "404" in error_msg:
-             raise HTTPException(status_code=404, detail=f"Model {settings.model_name} not found.")
+            raise HTTPException(status_code=500, detail=f"Model '{settings.model_name}' not found or not accessible with this API key.")
         raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/health")

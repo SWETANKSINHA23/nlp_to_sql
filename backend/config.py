@@ -5,7 +5,7 @@ load_dotenv()
 
 class Settings(BaseSettings):
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    model_name: str = "gemini-1.5-flash"
+    model_name: str = "gemini-1.5-flash-latest"
     max_tokens: int = 4096
     temperature: float = 0.2
     class Config:

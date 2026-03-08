@@ -133,7 +133,11 @@ with col2:
                         elif e.response.status_code == 503 or e.response.status_code == 0:
                             st.warning("🔄 Service is waking up (cold start). Please wait 30-60s and retry.")
                         else:
-                            st.error(f"❌ Backend error: {e.response.status_code}")
+                            try:
+                                detail = e.response.json().get("detail", e.response.text)
+                            except Exception:
+                                detail = e.response.text
+                            st.error(f"❌ Backend error {e.response.status_code}: {detail}")
                     except Exception as e:
                         st.error(f"❌ Unexpected error: {str(e)}")
 
