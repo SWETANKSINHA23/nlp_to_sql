@@ -2,9 +2,10 @@ import streamlit as st
 import requests
 from typing import Optional
 import time
-
 import os
+
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+
 st.set_page_config(
     page_title="SQL Query Generator",
     page_icon="sql.png",
@@ -21,13 +22,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def check_api_health() -> bool:
     try:
         response = requests.get(f"{API_URL}/health", timeout=5)
         return response.status_code == 200
     except:
         return False
+
+def wake_backend() -> bool:
+    """Ping the backend repeatedly until it wakes up (handles cold starts)."""
+    for attempt in range(8):  # try for up to ~80 seconds
+        try:
+            response = requests.get(f"{API_URL}/health", timeout=10)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+        time.sleep(10)
+    return False
+
 def generate_query(question: str, schema: Optional[str], db_type: str) -> dict:
     payload = {
         "question": question.strip(),
@@ -37,10 +51,11 @@ def generate_query(question: str, schema: Optional[str], db_type: str) -> dict:
     response = requests.post(
         f"{API_URL}/generate_sql/",
         json=payload,
-        timeout=90
+        timeout=120  # increased to 2 minutes to cover cold start + generation
     )
     response.raise_for_status()
     return response.json()
+
 import base64
 
 def get_base64_image(image_path):
@@ -54,11 +69,12 @@ icon_base64 = get_base64_image("sql.png")
 st.markdown(f'<h1 class="main-header"><img src="data:image/png;base64,{icon_base64}" width="60" style="vertical-align: bottom;"> SQL Query Generator</h1>', unsafe_allow_html=True)
 st.markdown("<div style='text-align: center; color: #666;'><b>Natural language to SQL using AI</b></div>", unsafe_allow_html=True)
 
-# Initialize session state for rate limiting
+# Initialize session state
 if "last_request_time" not in st.session_state:
     st.session_state.last_request_time = 0
 if "request_count" not in st.session_state:
     st.session_state.request_count = 0
+
 with st.sidebar:
     st.header("⚙️ Configuration")
     db_type = st.selectbox(
@@ -76,13 +92,13 @@ with st.sidebar:
     if check_api_health():
         st.success("✅ API Connected")
     else:
-        st.error("❌ API Unavailable")
+        st.warning("⏳ API waking up...")
     st.divider()
     st.caption(f"Requests: {st.session_state.request_count}")
+
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("💬 Enter Question")
-    
     examples = [
         "Show total sales by region in 2024",
         "Find top 10 customers by revenue",
@@ -98,8 +114,9 @@ with col1:
         height=150
     )
     generate = st.button("🚀 Generate SQL", type="primary", use_container_width=True)
+
 with col2:
-    st.subheader("📝 Generated Query")    
+    st.subheader("📝 Generated Query")
     if generate:
         if not question.strip():
             st.warning("⚠️ Enter a question")
@@ -108,9 +125,17 @@ with col2:
             COOLDOWN_SECONDS = 5
             if time_since_last < COOLDOWN_SECONDS and st.session_state.request_count > 0:
                 remaining = int(COOLDOWN_SECONDS - time_since_last)
-                st.warning(f"⏳ Please wait {remaining} seconds before making another request to avoid rate limits.")
+                st.warning(f"⏳ Please wait {remaining} seconds...")
             else:
-                with st.spinner("Generating..."):
+                # Step 1: Wake backend if needed
+                if not check_api_health():
+                    with st.spinner("🔄 Backend is starting up, please wait (up to 60s)..."):
+                        if not wake_backend():
+                            st.error("❌ Backend is unavailable. Please wait a minute and try again.")
+                            st.stop()
+
+                # Step 2: Generate SQL
+                with st.spinner("🤖 Generating SQL..."):
                     try:
                         st.session_state.last_request_time = time.time()
                         st.session_state.request_count += 1
@@ -123,22 +148,22 @@ with col2:
                             "query.sql",
                             "text/plain"
                         )
-                        st.success("✅ Generated successfully")
+                        st.success("✅ Generated successfully!")
                     except requests.exceptions.Timeout:
-                        st.warning("⏱️ Backend is cold-starting. Refresh and try again in 60 seconds.")
+                        st.error("⏱️ Request timed out. The backend may be overloaded. Try again in 30 seconds.")
                     except requests.exceptions.ConnectionError:
-                        st.error("🔌 Cannot reach backend. Service may be spinning up on Render.")
+                        st.error("🔌 Cannot reach backend. Service may be restarting.")
                     except requests.exceptions.HTTPError as e:
                         if e.response.status_code == 429:
-                            st.error("⏳ Rate limit hit. Please wait 1 minute and retry.")
-                        elif e.response.status_code == 503 or e.response.status_code == 0:
-                            st.warning("🔄 Service is waking up (cold start). Please wait 30-60s and retry.")
+                            st.error("⏳ **API Rate Limit Hit.**\n\nThe free Gemini API quota is exhausted. Please wait ~1 hour or generate a new API key at [aistudio.google.com](https://aistudio.google.com) and update it in Render settings.")
+                        elif e.response.status_code in (503, 502):
+                            st.warning("🔄 Backend starting up. Please wait 30s and retry.")
                         else:
                             try:
                                 detail = e.response.json().get("detail", e.response.text)
                             except Exception:
                                 detail = e.response.text
-                            st.error(f"❌ Backend error {e.response.status_code}: {detail}")
+                            st.error(f"❌ Error {e.response.status_code}: {detail}")
                     except Exception as e:
                         st.error(f"❌ Unexpected error: {str(e)}")
 
