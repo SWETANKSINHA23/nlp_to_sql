@@ -21,9 +21,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+@st.cache_data(ttl=60)
 def check_api_health() -> bool:
     try:
-        response = requests.get(f"{API_URL}/health", timeout=60)
+        response = requests.get(f"{API_URL}/health", timeout=5)
         return response.status_code == 200
     except:
         return False

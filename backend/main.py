@@ -67,8 +67,8 @@ def clean_sql_response(response: str) -> str:
     retry=retry_if_exception_type(google_exceptions.ResourceExhausted),
     reraise=True
 )
-def generate_content_with_retry(chat, prompt):
-    return chat.send_message(prompt)
+def generate_content_with_retry(full_prompt: str):
+    return model.generate_content(full_prompt)
 
 @app.get("/")
 def root():
@@ -80,11 +80,10 @@ async def generate_sql(request: QueryRequest):
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Question required")
         question = request.question.strip()
+        db_hint = f"Target database: {request.database_type}\n" if request.database_type else ""
         prompt = build_prompt(question, request.schema)
-        chat = model.start_chat(history=[])
-        
-        # retry-wrapped function
-        response = generate_content_with_retry(chat, f"{SYSTEM_PROMPT}\n\n{prompt}")
+        full_prompt = f"{SYSTEM_PROMPT}\n\n{db_hint}{prompt}"
+        response = generate_content_with_retry(full_prompt)
         sql_query = clean_sql_response(response.text)
         logger.info(f"Generated SQL for: {question[:50]}")
         return QueryResponse(
