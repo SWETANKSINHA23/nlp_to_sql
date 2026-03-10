@@ -201,11 +201,11 @@ with col2:
                     except requests.exceptions.HTTPError as e:
                         if e.response.status_code == 429:
                             st.error(
-                                "⏳ **API Rate Limit Hit.**\n\n"
-                                "The free Gemini API quota is exhausted. "
-                                "Please wait ~1 minute or generate a new API key at "
-                                "[aistudio.google.com](https://aistudio.google.com) "
-                                "and update it in Render settings."
+                                "⏳ **Gemini API Rate Limit Reached.**\n\n"
+                                "You are on the **free tier** (15 requests/min, 1,000 requests/day). "
+                                "The backend already retried automatically — please wait **60 seconds** and click Generate again.\n\n"
+                                "To get unlimited access, add a paid API key at "
+                                "[aistudio.google.com](https://aistudio.google.com) and update `GEMINI_API_KEY` in your Render settings."
                             )
                         elif e.response.status_code in (503, 502):
                             st.session_state.backend_ready = False
