@@ -81,7 +81,7 @@ async def generate_with_retry(prompt: str, max_attempts: int = 3) -> str:
             return text
         except google_exceptions.ResourceExhausted as e:
             last_error = e
-            wait_sec = 20 * (attempt + 1)   # 20s, 40s, 60s
+            wait_sec = 5 * (attempt + 1)    # 5s, 10s, 15s  (fast retry)
             logger.warning(f"Rate limited (attempt {attempt+1}). Waiting {wait_sec}s…")
             await asyncio.sleep(wait_sec)
         except Exception as e:
@@ -90,7 +90,12 @@ async def generate_with_retry(prompt: str, max_attempts: int = 3) -> str:
 
 @app.get("/")
 def root():
-    return {"status": "active", "version": "1.0.0"}
+    return {"status": "active", "message": "AI SQL Generator", "version": "1.0.0"}
+
+@app.get("/ping")
+def ping():
+    """Ultra-lightweight liveness probe — used by frontend for cold-start polling."""
+    return {"ok": True}
 
 @app.post("/generate_sql/", response_model=QueryResponse)
 async def generate_sql(request: QueryRequest):

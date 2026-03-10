@@ -3,6 +3,7 @@ import requests
 from typing import Optional
 import time
 import os
+import base64
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
@@ -22,25 +23,50 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=30)
+# ── Health / wake helpers ────────────────────────────────────────────────────
+
 def check_api_health() -> bool:
+    """Single lightweight health probe — NOT cached so it always reflects reality."""
     try:
-        response = requests.get(f"{API_URL}/health", timeout=5)
+        response = requests.get(f"{API_URL}/ping", timeout=4)
         return response.status_code == 200
-    except:
+    except Exception:
         return False
 
 def wake_backend() -> bool:
-    """Ping the backend repeatedly until it wakes up (handles cold starts)."""
-    for attempt in range(8):  # try for up to ~80 seconds
+    """
+    Proactively ping the backend until it wakes up.
+    6 attempts × 5 s = max 30 s (Render free tier typically wakes in 10-20 s).
+    """
+    MAX_ATTEMPTS = 6
+    POLL_INTERVAL = 5   # seconds between probes
+
+    for attempt in range(MAX_ATTEMPTS):
         try:
-            response = requests.get(f"{API_URL}/health", timeout=10)
+            response = requests.get(f"{API_URL}/ping", timeout=5)
             if response.status_code == 200:
                 return True
-        except:
+        except Exception:
             pass
-        time.sleep(10)
+        time.sleep(POLL_INTERVAL)
     return False
+
+# ── Proactive background wake on first page load ─────────────────────────────
+# Fires once per browser session so that by the time the user clicks Generate
+# the cold-start delay is already absorbed.
+if "backend_ready" not in st.session_state:
+    st.session_state.backend_ready = check_api_health()
+
+if not st.session_state.backend_ready:
+    # Show a one-time warming banner at the top of the page
+    with st.status("🔄 Backend warming up… (this takes ~10–20 s on first visit)", expanded=False) as status_box:
+        st.session_state.backend_ready = wake_backend()
+        if st.session_state.backend_ready:
+            status_box.update(label="✅ Backend is ready!", state="complete", expanded=False)
+        else:
+            status_box.update(label="⚠️ Backend slow to respond — will retry on Generate", state="error", expanded=False)
+
+# ── SQL generation ────────────────────────────────────────────────────────────
 
 def generate_query(question: str, schema: Optional[str], db_type: str) -> dict:
     payload = {
@@ -51,12 +77,12 @@ def generate_query(question: str, schema: Optional[str], db_type: str) -> dict:
     response = requests.post(
         f"{API_URL}/generate_sql/",
         json=payload,
-        timeout=120  # increased to 2 minutes to cover cold start + generation
+        timeout=60   # generous but not 2 min — backend is already awake by now
     )
     response.raise_for_status()
     return response.json()
 
-import base64
+# ── Image helper ──────────────────────────────────────────────────────────────
 
 def get_base64_image(image_path):
     try:
@@ -65,15 +91,27 @@ def get_base64_image(image_path):
     except Exception:
         return ""
 
-icon_base64 = get_base64_image("sql.png")
-st.markdown(f'<h1 class="main-header"><img src="data:image/png;base64,{icon_base64}" width="60" style="vertical-align: bottom;"> SQL Query Generator</h1>', unsafe_allow_html=True)
-st.markdown("<div style='text-align: center; color: #666;'><b>Natural language to SQL using AI</b></div>", unsafe_allow_html=True)
+# ── Header ────────────────────────────────────────────────────────────────────
 
-# Initialize session state
+icon_base64 = get_base64_image("sql.png")
+st.markdown(
+    f'<h1 class="main-header"><img src="data:image/png;base64,{icon_base64}" '
+    f'width="60" style="vertical-align: bottom;"> SQL Query Generator</h1>',
+    unsafe_allow_html=True
+)
+st.markdown(
+    "<div style='text-align: center; color: #666;'><b>Natural language to SQL using AI</b></div>",
+    unsafe_allow_html=True
+)
+
+# ── Session state ─────────────────────────────────────────────────────────────
+
 if "last_request_time" not in st.session_state:
     st.session_state.last_request_time = 0
 if "request_count" not in st.session_state:
     st.session_state.request_count = 0
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.header("⚙️ Configuration")
@@ -89,12 +127,16 @@ with st.sidebar:
         height=200
     )
     st.divider()
-    if check_api_health():
+    # Live (uncached) status check
+    if st.session_state.backend_ready or check_api_health():
+        st.session_state.backend_ready = True
         st.success("✅ API Connected")
     else:
-        st.warning("⏳ API waking up...")
+        st.warning("🔄 API warming up…")
     st.divider()
     st.caption(f"Requests: {st.session_state.request_count}")
+
+# ── Main content ──────────────────────────────────────────────────────────────
 
 col1, col2 = st.columns(2)
 with col1:
@@ -125,17 +167,18 @@ with col2:
             COOLDOWN_SECONDS = 5
             if time_since_last < COOLDOWN_SECONDS and st.session_state.request_count > 0:
                 remaining = int(COOLDOWN_SECONDS - time_since_last)
-                st.warning(f"⏳ Please wait {remaining} seconds...")
+                st.warning(f"⏳ Please wait {remaining} seconds…")
             else:
-                # Step 1: Wake backend if needed
-                if not check_api_health():
-                    with st.spinner("🔄 Backend is starting up, please wait (up to 60s)..."):
+                # Ensure backend is awake before generating
+                if not st.session_state.backend_ready and not check_api_health():
+                    with st.spinner("🔄 Backend is starting up, please wait (up to 30s)…"):
                         if not wake_backend():
-                            st.error("❌ Backend is unavailable. Please wait a minute and try again.")
+                            st.error("❌ Backend is unavailable. Please wait a moment and try again.")
                             st.stop()
+                        st.session_state.backend_ready = True
 
-                # Step 2: Generate SQL
-                with st.spinner("🤖 Generating SQL..."):
+                # Generate SQL
+                with st.spinner("🤖 Generating SQL…"):
                     try:
                         st.session_state.last_request_time = time.time()
                         st.session_state.request_count += 1
@@ -150,14 +193,23 @@ with col2:
                         )
                         st.success("✅ Generated successfully!")
                     except requests.exceptions.Timeout:
-                        st.error("⏱️ Request timed out. The backend may be overloaded. Try again in 30 seconds.")
+                        st.session_state.backend_ready = False
+                        st.error("⏱️ Request timed out. The backend may be overloaded. Try again in 15 seconds.")
                     except requests.exceptions.ConnectionError:
-                        st.error("🔌 Cannot reach backend. Service may be restarting.")
+                        st.session_state.backend_ready = False
+                        st.error("🔌 Cannot reach backend. Service may be restarting — refresh the page.")
                     except requests.exceptions.HTTPError as e:
                         if e.response.status_code == 429:
-                            st.error("⏳ **API Rate Limit Hit.**\n\nThe free Gemini API quota is exhausted. Please wait ~1 hour or generate a new API key at [aistudio.google.com](https://aistudio.google.com) and update it in Render settings.")
+                            st.error(
+                                "⏳ **API Rate Limit Hit.**\n\n"
+                                "The free Gemini API quota is exhausted. "
+                                "Please wait ~1 minute or generate a new API key at "
+                                "[aistudio.google.com](https://aistudio.google.com) "
+                                "and update it in Render settings."
+                            )
                         elif e.response.status_code in (503, 502):
-                            st.warning("🔄 Backend starting up. Please wait 30s and retry.")
+                            st.session_state.backend_ready = False
+                            st.warning("🔄 Backend restarting. Please wait 15s and retry.")
                         else:
                             try:
                                 detail = e.response.json().get("detail", e.response.text)
@@ -166,6 +218,8 @@ with col2:
                             st.error(f"❌ Error {e.response.status_code}: {detail}")
                     except Exception as e:
                         st.error(f"❌ Unexpected error: {str(e)}")
+
+# ── Footer ────────────────────────────────────────────────────────────────────
 
 st.divider()
 feat1, feat2, feat3 = st.columns(3)
